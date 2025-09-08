@@ -5,15 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Siatka odwiedzonych kwadratów</title>
 
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    crossorigin=""
-  />
-  <script
-    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    crossorigin=""
-  ></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 
   <style>
     html, body { height: 100%; margin: 0; }
@@ -21,20 +14,24 @@
 
     .panel {
       position: absolute;
-      bottom: 12px; left: 12px;
+      bottom: 12px;
+      left: 12px;
       z-index: 1000;
       background: rgba(255,255,255,0.9);
       border-radius: 12px;
       box-shadow: 0 6px 20px rgba(0,0,0,0.15);
       padding: 10px 12px;
       font: 14px/1.3 system-ui, sans-serif;
+      transition: transform 0.25s ease;
     }
+    .panel.hidden { transform: translateX(-100%); }
+
     .panel label { display: flex; align-items: center; gap: 8px; margin: 6px 0; cursor: pointer; }
     .btn {
       display: inline-block;
       border: none;
       border-radius: 10px;
-      padding: 8px 10px;
+      padding: 6px 10px;
       margin: 2px 0;
       background: #1f6feb;
       color: #fff;
@@ -44,12 +41,23 @@
     }
     .btn.red { background: #d73a49; }
     .counter { margin-top:8px; font-size:13px; }
+
+    .toggle-panel {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      cursor: pointer;
+      font-weight: bold;
+      font-size: 14px;
+      user-select: none;
+    }
   </style>
 </head>
 <body>
   <div id="map"></div>
 
-  <div class="panel">
+  <div class="panel" id="panel">
+    <div class="toggle-panel" id="togglePanel">➤</div>
     <div style="font-weight:600; margin-bottom:6px;">Warstwy siatki</div>
     <label><input id="toggleBig" type="checkbox" checked /> Squadrats</label>
     <label><input id="toggleSmall" type="checkbox" checked /> Squadratinhos</label>
@@ -63,11 +71,11 @@
   </div>
 
   <script>
-    const map = L.map('map').setView([50.3058, 18.9742], 14);
+    const map = L.map('map', { doubleClickZoom:false }).setView([50.3058, 18.9742], 14);
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    const cycloLayer = L.tileLayer('https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png', {
       maxZoom: 20,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> & CyclOSM'
     }).addTo(map);
 
     const bigGridLayer = L.layerGroup().addTo(map);
@@ -76,7 +84,6 @@
     const bigStyle = { color: '#1f6feb', weight: 2.5, opacity: 0.9, fillOpacity: 0 };
     const smallStyle = { color: '#37c46a', weight: 0.8, opacity: 0.8, fillOpacity: 0 };
 
-    // odwiedzone kwadraty
     const visitedBig = new Set(JSON.parse(localStorage.getItem('visitedBig') || "[]"));
     const visitedSmall = new Set(JSON.parse(localStorage.getItem('visitedSmall') || "[]"));
 
@@ -97,7 +104,6 @@
       const endY   = Math.ceil(se.y / tileSize) * tileSize;
 
       let total = 0, visitedCount = 0;
-
       for (let x = startX; x < endX; x += tileSize) {
         for (let y = startY; y < endY; y += tileSize) {
           total++;
@@ -112,7 +118,6 @@
             fillColor: visitedSet.has(id) ? fillColor : undefined,
             fillOpacity: visitedSet.has(id) ? (strong ? 0.55 : 0.3) : 0
           });
-
           if (visitedSet.has(id)) visitedCount++;
           layer.addLayer(rect);
         }
@@ -124,7 +129,6 @@
       requestAnimationFrame(() => {
         const bigStats = drawGrid(14, bigGridLayer, bigStyle, visitedBig, '#1f6feb');
         const smallStats = drawGrid(17, smallGridLayer, smallStyle, visitedSmall, '#15803d', true);
-
         document.getElementById("counter").textContent =
           `Duże: ${bigStats.visitedCount}/${bigStats.total}  |  Małe: ${smallStats.visitedCount}/${smallStats.total}`;
       });
@@ -133,12 +137,8 @@
     scheduleRedraw();
     map.on('moveend zoomend resize', scheduleRedraw);
 
-    document.getElementById('toggleBig').addEventListener('change', e => {
-      e.target.checked ? bigGridLayer.addTo(map) : map.removeLayer(bigGridLayer);
-    });
-    document.getElementById('toggleSmall').addEventListener('change', e => {
-      e.target.checked ? smallGridLayer.addTo(map) : map.removeLayer(smallGridLayer);
-    });
+    document.getElementById('toggleBig').addEventListener('change', e => e.target.checked ? bigGridLayer.addTo(map) : map.removeLayer(bigGridLayer));
+    document.getElementById('toggleSmall').addEventListener('change', e => e.target.checked ? smallGridLayer.addTo(map) : map.removeLayer(smallGridLayer));
 
     function getTileIdForLatLng(latlng, zRef) {
       const p = map.project(latlng, zRef);
@@ -148,148 +148,90 @@
       return `${zRef}-${x}-${y}`;
     }
 
-    let watchActive = false;
-    let userMarker, userCircle;
-    let firstLocation = true;
-
+    let watchActive = false, userMarker, userCircle, firstLocation=true;
     document.getElementById('locateBtn').addEventListener('click', () => {
-      if (watchActive) {
-        map.stopLocate();
-        watchActive = false;
-        return;
-      }
-      if (!navigator.geolocation) return;
-      map.locate({ watch: true, maxZoom: 17, enableHighAccuracy: true, setView: false });
+      if(watchActive){ map.stopLocate(); watchActive=false; return; }
+      if(!navigator.geolocation) return;
+      map.locate({ watch:true, maxZoom:17, enableHighAccuracy:true, setView:false });
       watchActive = true;
       firstLocation = true;
     });
 
     map.on('locationfound', e => {
-      const { latlng, accuracy } = e;
-      if (firstLocation) {
-        map.setView(latlng, 16);
-        firstLocation = false;
-      }
-
-      if (userMarker) map.removeLayer(userMarker);
-      if (userCircle) map.removeLayer(userCircle);
+      const {latlng, accuracy} = e;
+      if(firstLocation){ map.setView(latlng,16); firstLocation=false; }
+      if(userMarker) map.removeLayer(userMarker);
+      if(userCircle) map.removeLayer(userCircle);
       userMarker = L.marker(latlng).addTo(map);
-      userCircle = L.circle(latlng, { radius: accuracy, color: '#1f6feb', weight: 1 }).addTo(map);
+      userCircle = L.circle(latlng,{radius:accuracy,color:'#1f6feb',weight:1}).addTo(map);
 
-      // oznaczamy odwiedzone
-      const bigId = getTileIdForLatLng(latlng, 14);
-      const smallId = getTileIdForLatLng(latlng, 17);
-
-      let changed = false;
-      if (!visitedBig.has(bigId)) { visitedBig.add(bigId); changed = true; }
-      if (!visitedSmall.has(smallId)) { visitedSmall.add(smallId); changed = true; }
-
-      if (changed) {
-        saveVisited();
-        scheduleRedraw();
-      }
+      const bigId = getTileIdForLatLng(latlng,14);
+      const smallId = getTileIdForLatLng(latlng,17);
+      let changed=false;
+      if(!visitedBig.has(bigId)){ visitedBig.add(bigId); changed=true; }
+      if(!visitedSmall.has(smallId)){ visitedSmall.add(smallId); changed=true; }
+      if(changed){ saveVisited(); scheduleRedraw(); }
     });
 
     map.on('locationerror', e => console.warn('Błąd geolokalizacji:', e.message));
 
-    // Ręczne zaznaczanie małych kwadratów (dwuklik)
-    map.on('dblclick', (e) => {
-      const smallId = getTileIdForLatLng(e.latlng, 17);
-      if (!visitedSmall.has(smallId)) {
-        visitedSmall.add(smallId);
-        saveVisited();
-        scheduleRedraw();
-      }
+    // Dwuklik tylko zaznacza mały kwadrat
+    map.on('dblclick', e => {
+      const smallId = getTileIdForLatLng(e.latlng,17);
+      if(!visitedSmall.has(smallId)){ visitedSmall.add(smallId); saveVisited(); scheduleRedraw(); }
     });
 
-    // Eksport GeoJSON
-    document.getElementById('exportBtn').addEventListener('click', () => {
-      const features = [];
-
-      for (let id of visitedBig) {
-        const [z,x,y] = id.split("-").map(Number);
-        features.push(tileToPolygon(x,y,z,"big"));
-      }
-      for (let id of visitedSmall) {
-        const [z,x,y] = id.split("-").map(Number);
-        features.push(tileToPolygon(x,y,z,"small"));
-      }
-
-      const geojson = { type: "FeatureCollection", features };
-      const blob = new Blob([JSON.stringify(geojson,null,2)], {type:"application/json"});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "visited-squares.geojson";
-      a.click();
-      URL.revokeObjectURL(url);
+    // Eksport
+    document.getElementById('exportBtn').addEventListener('click',()=>{
+      const features=[];
+      for(let id of visitedBig){ const [z,x,y]=id.split("-").map(Number); features.push(tileToPolygon(x,y,z,"big")); }
+      for(let id of visitedSmall){ const [z,x,y]=id.split("-").map(Number); features.push(tileToPolygon(x,y,z,"small")); }
+      const geojson={type:"FeatureCollection",features};
+      const blob=new Blob([JSON.stringify(geojson,null,2)],{type:"application/json"});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement("a"); a.href=url; a.download="visited-squares.geojson"; a.click(); URL.revokeObjectURL(url);
     });
 
-    // Import GeoJSON
-    document.getElementById('importBtn').addEventListener('click', () => {
-      document.getElementById('importFile').click();
-    });
-
-    document.getElementById('importFile').addEventListener('change', (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (evt) => {
-        try {
-          const data = JSON.parse(evt.target.result);
-          if (data.type === "FeatureCollection") {
-            let changed = false;
-            data.features.forEach(f => {
-              if (f.properties?.grid === "big") {
-                visitedBig.add(f.id); changed = true;
-              } else if (f.properties?.grid === "small") {
-                visitedSmall.add(f.id); changed = true;
-              }
+    // Import
+    document.getElementById('importBtn').addEventListener('click',()=>document.getElementById('importFile').click());
+    document.getElementById('importFile').addEventListener('change', e=>{
+      const file=e.target.files[0]; if(!file) return;
+      const reader=new FileReader();
+      reader.onload=evt=>{
+        try{
+          const data=JSON.parse(evt.target.result);
+          if(data.type==="FeatureCollection"){
+            let changed=false;
+            data.features.forEach(f=>{
+              if(f.properties?.grid==="big"){visitedBig.add(f.id); changed=true;}
+              else if(f.properties?.grid==="small"){visitedSmall.add(f.id); changed=true;}
             });
-            if (changed) {
-              saveVisited();
-              scheduleRedraw();
-            }
+            if(changed){ saveVisited(); scheduleRedraw(); }
           }
-        } catch (err) {
-          console.error("Błąd przy imporcie GeoJSON:", err.message);
-        }
+        }catch(err){ console.error("Błąd przy imporcie GeoJSON:", err.message); }
       };
       reader.readAsText(file);
     });
 
-    // Reset odwiedzonych
-    document.getElementById('resetBtn').addEventListener('click', () => {
-      visitedBig.clear();
-      visitedSmall.clear();
-      saveVisited();
-      scheduleRedraw();
+    // Reset z potwierdzeniem
+    document.getElementById('resetBtn').addEventListener('click',()=>{
+      if(confirm("Czy na pewno wyczyścić zaznaczone kwadraty?")){
+        visitedBig.clear(); visitedSmall.clear(); saveVisited(); scheduleRedraw();
+      }
     });
 
-    // Zamiana kafelka na poligon GeoJSON
-    function tileToPolygon(x,y,z,type){
-      const pNW = L.point(x,y);
-      const pSE = L.point(x+256,y+256);
-      const llNW = map.unproject(pNW, z);
-      const llSE = map.unproject(pSE, z);
-      const llNE = L.latLng(llNW.lat, llSE.lng);
-      const llSW = L.latLng(llSE.lat, llNW.lng);
+    // Chowanie/odkrywanie panelu
+    const panel=document.getElementById('panel');
+    const toggleBtn=document.getElementById('togglePanel');
+    toggleBtn.addEventListener('click',()=>panel.classList.toggle('hidden'));
 
-      return {
-        type:"Feature",
-        id:`${z}-${x}-${y}`,
-        properties:{grid:type},
-        geometry:{
-          type:"Polygon",
-          coordinates:[[
-            [llNW.lng,llNW.lat],
-            [llNE.lng,llNE.lat],
-            [llSE.lng,llSE.lat],
-            [llSW.lng,llSW.lat],
-            [llNW.lng,llNW.lat]
-          ]]
-        }
-      };
+    function tileToPolygon(x,y,z,type){
+      const pNW=L.point(x,y), pSE=L.point(x+256,y+256);
+      const llNW=map.unproject(pNW,z), llSE=map.unproject(pSE,z);
+      const llNE=L.latLng(llNW.lat,llSE.lng), llSW=L.latLng(llSE.lat,llNW.lng);
+      return {type:"Feature",id:`${z}-${x}-${y}`,properties:{grid:type},geometry:{type:"Polygon",coordinates:[[
+        [llNW.lng,llNW.lat],[llNE.lng,llNE.lat],[llSE.lng,llSE.lat],[llSW.lng,llSW.lat],[llNW.lng,llNW.lat]
+      ]]}};
     }
   </script>
 </body>
