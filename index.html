@@ -10,7 +10,7 @@
 
 <style>
 html, body { height: 100%; margin: 0; }
-#map { height: 100%; width: 100%; }
+#map { height: 100%; width: 100%; touch-action: none; }
 
 .panel {
   position: absolute;
@@ -52,10 +52,24 @@ html, body { height: 100%; margin: 0; }
   font-size: 14px;
   user-select: none;
 }
+
+#compassBtn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: rgba(255,255,255,0.9);
+  border-radius: 50%;
+  padding: 6px;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.25);
+  cursor: pointer;
+  z-index: 1000;
+}
+#compassBtn img { width: 24px; height: 24px; transform: rotate(0deg); transition: transform 0.25s; }
 </style>
 </head>
 <body>
 <div id="map"></div>
+<div id="compassBtn"><img src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/3c/Compass_icon.svg/1024px-Compass_icon.svg.png"/></div>
 
 <div class="panel" id="panel">
   <div class="toggle-panel" id="togglePanel">➤</div>
@@ -64,6 +78,7 @@ html, body { height: 100%; margin: 0; }
   <label><input id="toggleSmall" type="checkbox" checked /> Squadratinhos</label>
   <hr style="border:none; border-top:1px solid #e9e9e9; margin:8px 0;">
   <button id="locateBtn" class="btn">GPS</button>
+  <button id="followBtn" class="btn">Podążaj</button>
   <button id="exportBtn" class="btn">Eksport</button>
   <input type="file" id="importFile" accept=".geojson,.json" style="display:none;"/>
   <button id="importBtn" class="btn">Import</button>
@@ -72,7 +87,7 @@ html, body { height: 100%; margin: 0; }
 </div>
 
 <script>
-const map = L.map('map', {doubleClickZoom:false}).setView([50.3058,18.9742],14);
+const map = L.map('map',{doubleClickZoom:false}).setView([50.3058,18.9742],14);
 
 const cycloLayer = L.tileLayer('https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',{
   maxZoom:20,
@@ -110,17 +125,16 @@ function drawGrid(zRef, layer, style, visitedSet, fillColor, strong=false){
       total++;
       const id=`${zRef}-${x}-${y}`;
       const pNW=L.point(x,y);
-      const pSE=L.point(x+tileSize, y+tileSize);
+      const pSE=L.point(x+tileSize,y+tileSize);
       const llNW=map.unproject(pNW,zRef);
       const llSE=map.unproject(pSE,zRef);
-
       const rect = L.rectangle([llNW,llSE],{
         ...style,
         fillColor: visitedSet.has(id)?fillColor:undefined,
         fillOpacity: visitedSet.has(id)?(strong?0.55:0.3):0
       });
-      if(visitedSet.has(id)) visitedCount++;
       layer.addLayer(rect);
+      if(visitedSet.has(id)) visitedCount++;
     }
   }
   return {total, visitedCount};
@@ -149,15 +163,19 @@ function getTileIdForLatLng(latlng,zRef){
   return `${zRef}-${x}-${y}`;
 }
 
-let watchActive=false,userMarker,userCircle,firstLocation=true;
+let watchActive=false, followActive=false, autoRotate=true;
+let userMarker,userCircle,firstLocation=true;
+let currentHeading=0;
+
 const locateBtn=document.getElementById('locateBtn');
+const followBtn=document.getElementById('followBtn');
 
 locateBtn.addEventListener('click', ()=>{
-  if(watchActive){ 
-    map.stopLocate(); 
-    watchActive=false; 
-    locateBtn.classList.remove('green'); 
-    return; 
+  if(watchActive){
+    map.stopLocate();
+    watchActive=false;
+    locateBtn.classList.remove('green');
+    return;
   }
   if(!navigator.geolocation) return;
   map.locate({watch:true,maxZoom:17,enableHighAccuracy:true,setView:false});
@@ -165,13 +183,27 @@ locateBtn.addEventListener('click', ()=>{
   locateBtn.classList.add('green');
 });
 
+followBtn.addEventListener('click', ()=>{
+  followActive = !followActive;
+  if(followActive){
+    followBtn.classList.add('green');
+  } else {
+    followBtn.classList.remove('green');
+  }
+});
+
 map.on('locationfound', e=>{
   const {latlng,accuracy}=e;
-  if(firstLocation){ map.setView(latlng,16); firstLocation=false; }
+  if(firstLocation || followActive){ map.setView(latlng, map.getZoom()); firstLocation=false; }
   if(userMarker) map.removeLayer(userMarker);
   if(userCircle) map.removeLayer(userCircle);
   userMarker=L.marker(latlng).addTo(map);
   userCircle=L.circle(latlng,{radius:accuracy,color:'#1f6feb',weight:1}).addTo(map);
+
+  if(followActive && autoRotate){
+    map.getContainer().style.transform = `rotate(${-currentHeading}deg)`;
+    document.querySelector("#compassBtn img").style.transform = `rotate(${currentHeading}deg)`;
+  }
 
   const bigId=getTileIdForLatLng(latlng,14);
   const smallId=getTileIdForLatLng(latlng,17);
@@ -181,20 +213,21 @@ map.on('locationfound', e=>{
   if(changed){ saveVisited(); scheduleRedraw(); }
 });
 
-map.on('locationerror', e=>console.warn('Błąd geolokalizacji:',e.message));
+// Odczyt kierunku z kompasu
+if(window.DeviceOrientationEvent){
+  window.addEventListener("deviceorientationabsolute", e=>{
+    if(e.alpha!==null){
+      currentHeading = 360 - e.alpha;
+    }
+  }, true);
+}
 
 map.on('dblclick', e=>{
   const smallId=getTileIdForLatLng(e.latlng,17);
   const bigId=getTileIdForLatLng(e.latlng,14);
-
-  if(visitedSmall.has(smallId)){
-    visitedSmall.delete(smallId);
-  } else {
-    visitedSmall.add(smallId);
-    if(!visitedBig.has(bigId)) visitedBig.add(bigId);
-  }
-  saveVisited();
-  scheduleRedraw();
+  if(visitedSmall.has(smallId)){ visitedSmall.delete(smallId); }
+  else { visitedSmall.add(smallId); if(!visitedBig.has(bigId)) visitedBig.add(bigId); }
+  saveVisited(); scheduleRedraw();
 });
 
 document.getElementById('exportBtn').addEventListener('click', ()=>{
@@ -235,6 +268,12 @@ document.getElementById('resetBtn').addEventListener('click', ()=>{
 
 const panel=document.getElementById('panel');
 document.getElementById('togglePanel').addEventListener('click', ()=>panel.classList.toggle('hidden'));
+
+document.getElementById("compassBtn").addEventListener("click", ()=>{
+  autoRotate = false;
+  map.getContainer().style.transform="rotate(0deg)";
+  document.querySelector("#compassBtn img").style.transform="rotate(0deg)";
+});
 
 function tileToPolygon(x,y,z,type){
   const pNW=L.point(x,y), pSE=L.point(x+256,y+256);
