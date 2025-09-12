@@ -10,7 +10,7 @@
 
 <style>
 html, body { height: 100%; margin: 0; }
-#map { height: 100%; width: 100%; touch-action: none; transition: transform 0.3s ease; }
+#map { height: 100%; width: 100%; }
 
 .panel {
   position: absolute;
@@ -64,7 +64,7 @@ html, body { height: 100%; margin: 0; }
   cursor: pointer;
   z-index: 1000;
 }
-#compassBtn img { width: 28px; height: 28px; transform: rotate(0deg); transition: transform 0.3s ease; }
+#compassBtn img { width: 28px; height: 28px; }
 </style>
 </head>
 <body>
@@ -91,7 +91,7 @@ html, body { height: 100%; margin: 0; }
 <script>
 const map = L.map('map',{doubleClickZoom:false}).setView([50.3058,18.9742],14);
 
-const cycloLayer = L.tileLayer('https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',{
+L.tileLayer('https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',{
   maxZoom:20,
   attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> & CyclOSM'
 }).addTo(map);
@@ -165,12 +165,18 @@ function getTileIdForLatLng(latlng,zRef){
   return `${zRef}-${x}-${y}`;
 }
 
-let watchActive=false, followActive=false, autoRotate=true;
+let watchActive=false, followActive=false;
 let userMarker,userCircle,firstLocation=true;
 let currentHeading=0;
 
 const locateBtn=document.getElementById('locateBtn');
 const followBtn=document.getElementById('followBtn');
+
+const arrowIcon = L.divIcon({
+  html:'<div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:12px solid #1f6feb;transform:rotate(0deg);"></div>',
+  iconSize:[12,12],
+  className:'arrow-marker'
+});
 
 locateBtn.addEventListener('click', ()=>{
   if(watchActive){
@@ -187,27 +193,18 @@ locateBtn.addEventListener('click', ()=>{
 
 followBtn.addEventListener('click', ()=>{
   followActive = !followActive;
-  autoRotate = followActive; // włącza auto-rotację przy podążaniu
-  if(followActive){ followBtn.classList.add('green'); }
-  else {
-    followBtn.classList.remove('green');
-    map.getContainer().style.transform="rotate(0deg)";
-    document.querySelector("#compassBtn img").style.transform="rotate(0deg)";
-  }
+  followBtn.classList.toggle('green', followActive);
 });
 
 map.on('locationfound', e=>{
   const {latlng,accuracy}=e;
-  if(firstLocation || followActive){ map.setView(latlng, map.getZoom()); firstLocation=false; }
+  if(firstLocation || followActive){ map.panTo(latlng, {animate:true}); firstLocation=false; }
   if(userMarker) map.removeLayer(userMarker);
   if(userCircle) map.removeLayer(userCircle);
-  userMarker=L.marker(latlng).addTo(map);
-  userCircle=L.circle(latlng,{radius:accuracy,color:'#1f6feb',weight:1}).addTo(map);
 
-  if(followActive && autoRotate){
-    map.getContainer().style.transform = `rotate(${-currentHeading}deg)`;
-    document.querySelector("#compassBtn img").style.transform = `rotate(${currentHeading}deg)`;
-  }
+  userMarker=L.marker(latlng,{icon:arrowIcon,rotationAngle:currentHeading}).addTo(map);
+  userMarker._icon.style.transform=`rotate(${currentHeading}deg)`;
+  userCircle=L.circle(latlng,{radius:accuracy,color:'#1f6feb',weight:1}).addTo(map);
 
   const bigId=getTileIdForLatLng(latlng,14);
   const smallId=getTileIdForLatLng(latlng,17);
@@ -267,14 +264,8 @@ document.getElementById('resetBtn').addEventListener('click', ()=>{
   }
 });
 
-const panel=document.getElementById('panel');
-document.getElementById('togglePanel').addEventListener('click', ()=>panel.classList.toggle('hidden'));
-
-document.getElementById("compassBtn").addEventListener("click", ()=>{
-  autoRotate = false;
-  map.getContainer().style.transform="rotate(0deg)";
-  document.querySelector("#compassBtn img").style.transform="rotate(0deg)";
-});
+document.getElementById('togglePanel').addEventListener('click', ()=>document.getElementById('panel').classList.toggle('hidden'));
+document.getElementById("compassBtn").addEventListener("click", ()=>{ if(userMarker) map.panTo(userMarker.getLatLng(),{animate:true}); });
 
 function tileToPolygon(x,y,z,type){
   const pNW=L.point(x,y), pSE=L.point(x+256,y+256);
